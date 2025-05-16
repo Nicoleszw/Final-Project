@@ -5,3 +5,4 @@ node_modules
 /dist
 /build
 
+VITE_API_URL=https://mindmood-backend.onrender.com
