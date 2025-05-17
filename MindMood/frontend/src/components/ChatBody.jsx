@@ -3,7 +3,6 @@ import { useAuth } from '../hooks/useAuth';
 import { api } from '../api';
 import EndChatButton from './EndChatButton';
 
-/* Colores para la “chapita” de emoción */
 const badgeColor = {
   joy: 'bg-yellow-400',
   sadness: 'bg-blue-500',
@@ -15,6 +14,10 @@ const badgeColor = {
 
 export default function ChatBody({ onChatEnded }) {
   const { token } = useAuth();
+
+  /* ✅ guardamos el sessionId que llega del backend */
+  const [sessionId, setSessionId] = useState(null);
+
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
@@ -28,13 +31,12 @@ export default function ChatBody({ onChatEnded }) {
 
   const chatRef = useRef(null);
 
-  /* Scroll automático al último mensaje */
+  /* auto-scroll */
   useEffect(() => {
-    const el = chatRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight });
   }, [messages]);
 
-  /* ───────────── Enviar mensaje ───────────── */
+  /* ─────── send message ─────── */
   async function sendMessage(e) {
     e.preventDefault();
     if (chatEnded || loading || !input.trim()) return;
@@ -67,7 +69,6 @@ export default function ChatBody({ onChatEnded }) {
       const decoder = new TextDecoder();
       let assistantBuffer = '';
 
-      /* Procesa cada chunk SSE */
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -83,7 +84,13 @@ export default function ChatBody({ onChatEnded }) {
           const evt = head.replace('event: ', '').trim();
           const data = dataRaw;
 
-          /* Evento emoción */
+          /* ◾ sesión */
+          if (evt === 'session') {
+            setSessionId(data.trim());
+            return;
+          }
+
+          /* ◾ emoción */
           if (evt === 'emotion') {
             setMessages((prev) => {
               const out = [...prev];
@@ -93,10 +100,10 @@ export default function ChatBody({ onChatEnded }) {
             return;
           }
 
-          /* Evento fin */
+          /* ◾ fin */
           if (evt === 'end') return;
 
-          /* Texto incremental del asistente */
+          /* ◾ texto delta */
           assistantBuffer += data;
           setMessages((prev) => {
             const out = [...prev];
@@ -119,11 +126,11 @@ export default function ChatBody({ onChatEnded }) {
     }
   }
 
-  /* ───────────── Cerrar sesión manual ───────────── */
+  /* ─────── end chat ─────── */
   async function endChatSession() {
     setEndError(null);
     try {
-      await api.post('/messages/end-session');
+      await api.post('/messages/end-session', { session_id: sessionId });
       setMessages((prev) => [
         ...prev,
         {
@@ -139,7 +146,7 @@ export default function ChatBody({ onChatEnded }) {
     }
   }
 
-  /* ───────────── Render ───────────── */
+  /* ─────── UI ─────── */
   return (
     <div className="flex flex-col h-[500px] w-full max-w-2xl bg-white rounded-2xl shadow-xl border border-gray-300">
       <div ref={chatRef} className="flex-1 overflow-y-auto p-6 space-y-4">
