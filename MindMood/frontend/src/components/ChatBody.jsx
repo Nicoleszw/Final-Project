@@ -1,9 +1,8 @@
-// ChatBody.jsx
 import { useEffect, useRef, useState } from 'react';
-import { api } from '../api';
 import { useAuth } from '../hooks/useAuth';
 import EndChatButton from './EndChatButton';
 
+/* Colores de la “badge” de emoción */
 const badgeColor = {
   joy: 'bg-yellow-400',
   sadness: 'bg-blue-500',
@@ -26,17 +25,15 @@ export default function ChatBody({ onChatEnded }) {
   const [chatEnded, setChatEnded] = useState(false);
   const [endError, setEndError] = useState(null);
 
-  const chatContainerRef = useRef(null);
+  const chatRef = useRef(null);
 
-  const scrollChatToBottom = () => {
-    const container = chatContainerRef.current;
-    if (container) {
-      container.scrollTop = container.scrollHeight;
-    }
-  };
+  /* Scroll al último mensaje */
+  useEffect(() => {
+    const el = chatRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages]);
 
-  useEffect(scrollChatToBottom, [messages]);
-
+  /* Envío de mensaje */
   async function sendMessage(e) {
     e.preventDefault();
     if (chatEnded || loading || !input.trim()) return;
@@ -45,6 +42,7 @@ export default function ChatBody({ onChatEnded }) {
     setInput('');
     setLoading(true);
 
+    /* Mostramos al usuario su mensaje + placeholder del assistant */
     const userIdx = messages.length;
     setMessages((prev) => [
       ...prev,
@@ -54,7 +52,9 @@ export default function ChatBody({ onChatEnded }) {
 
     try {
       const res = await fetch(
-        `${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/messages/stream`,
+        `${
+          import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
+        }/messages/stream`,
         {
           method: 'POST',
           headers: {
@@ -63,7 +63,7 @@ export default function ChatBody({ onChatEnded }) {
             Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({ content }),
-        }
+        },
       );
 
       if (res.status === 401) throw new Error('unauthorized');
@@ -72,12 +72,13 @@ export default function ChatBody({ onChatEnded }) {
       const decoder = new TextDecoder();
       let assistantBuffer = '';
 
+      /* Procesamos cada chunk SSE */
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        chunk.split('\n\n').forEach((raw) => {
+        const str = decoder.decode(value, { stream: true });
+        str.split('\n\n').forEach((raw) => {
           if (!raw.trim()) return;
 
           const [head, dataRaw] = raw.includes('\ndata: ')
@@ -87,40 +88,60 @@ export default function ChatBody({ onChatEnded }) {
           const evt = head.replace('event: ', '').trim();
           const data = dataRaw;
 
-          if (evt === 'emotion' && data) {
+          /* Evento emoción */
+          if (evt === 'emotion') {
             setMessages((prev) => {
-              const updated = [...prev];
-              updated[userIdx].emotion = data.trim();
-              return updated;
+              const out = [...prev];
+              out[userIdx].emotion = data.trim();
+              return out;
             });
-          } else if (evt !== 'end' && data) {
-            assistantBuffer += data;
-            setMessages((prev) => {
-              const updated = [...prev];
-              updated[userIdx + 1].content = assistantBuffer;
-              return updated;
-            });
+            return;
           }
+
+          /* Evento mensaje normal */
+          if (evt === 'end') return;
+
+          assistantBuffer += data;
+          setMessages((prev) => {
+            const out = [...prev];
+            out[userIdx + 1].content = assistantBuffer;
+            return out;
+          });
         });
       }
     } catch (err) {
       setMessages((prev) => {
-        const updated = [...prev];
-        updated[userIdx + 1].content =
+        const out = [...prev];
+        out[userIdx + 1].content =
           err.message === 'unauthorized'
             ? '⚠️ Session expired. Please log in again.'
             : '⚠️ Connection error';
-        return updated;
+        return out;
       });
     } finally {
       setLoading(false);
     }
   }
 
+  /* Cierra la sesión manualmente */
   async function endChatSession() {
     setEndError(null);
     try {
-      await api.post('/messages/end-session');
+      await fetch(
+        `${
+          import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
+        }/messages/end-session`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          /* El backend detecta la sesión activa automáticamente */
+          body: JSON.stringify({}),
+        },
+      );
+
       setMessages((prev) => [
         ...prev,
         {
@@ -132,17 +153,15 @@ export default function ChatBody({ onChatEnded }) {
       setChatEnded(true);
       if (onChatEnded) onChatEnded();
     } catch (err) {
-      console.error('Failed to end session:', err);
+      console.error(err);
       setEndError('⚠️ Could not end session. Please try again.');
     }
   }
 
+  /* ─────────────── Markup ─────────────── */
   return (
     <div className="flex flex-col h-[500px] w-full max-w-2xl bg-white rounded-2xl shadow-xl border border-gray-300">
-      <div
-        ref={chatContainerRef}
-        className="flex-1 overflow-y-auto p-6 space-y-4"
-      >
+      <div ref={chatRef} className="flex-1 overflow-y-auto p-6 space-y-4">
         {messages.map((m, i) => (
           <div
             key={i}
@@ -164,13 +183,17 @@ export default function ChatBody({ onChatEnded }) {
         ))}
       </div>
 
+      {/* Input + botones */}
       {chatEnded ? (
         <div className="p-4 text-center text-sm text-gray-500">
           👋 Chat ended. Your session is saved in your history.
         </div>
       ) : (
         <>
-          <form onSubmit={sendMessage} className="p-4 flex gap-3 border-t bg-white">
+          <form
+            onSubmit={sendMessage}
+            className="p-4 flex gap-3 border-t bg-white"
+          >
             <input
               className="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               placeholder="Type how you feel…"
