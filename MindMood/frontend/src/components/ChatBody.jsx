@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
+import { api } from '../api';
 import EndChatButton from './EndChatButton';
 
-/* Colores de la “badge” de emoción */
+/* Colores para la “chapita” de emoción */
 const badgeColor = {
   joy: 'bg-yellow-400',
   sadness: 'bg-blue-500',
@@ -27,13 +28,13 @@ export default function ChatBody({ onChatEnded }) {
 
   const chatRef = useRef(null);
 
-  /* Scroll al último mensaje */
+  /* Scroll automático al último mensaje */
   useEffect(() => {
     const el = chatRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
-  /* Envío de mensaje */
+  /* ───────────── Enviar mensaje ───────────── */
   async function sendMessage(e) {
     e.preventDefault();
     if (chatEnded || loading || !input.trim()) return;
@@ -42,7 +43,6 @@ export default function ChatBody({ onChatEnded }) {
     setInput('');
     setLoading(true);
 
-    /* Mostramos al usuario su mensaje + placeholder del assistant */
     const userIdx = messages.length;
     setMessages((prev) => [
       ...prev,
@@ -51,20 +51,15 @@ export default function ChatBody({ onChatEnded }) {
     ]);
 
     try {
-      const res = await fetch(
-        `${
-          import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
-        }/messages/stream`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'text/event-stream',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ content }),
+      const res = await fetch(`${api.defaults.baseURL}/messages/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+          Authorization: `Bearer ${token}`,
         },
-      );
+        body: JSON.stringify({ content }),
+      });
 
       if (res.status === 401) throw new Error('unauthorized');
 
@@ -72,7 +67,7 @@ export default function ChatBody({ onChatEnded }) {
       const decoder = new TextDecoder();
       let assistantBuffer = '';
 
-      /* Procesamos cada chunk SSE */
+      /* Procesa cada chunk SSE */
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -98,9 +93,10 @@ export default function ChatBody({ onChatEnded }) {
             return;
           }
 
-          /* Evento mensaje normal */
+          /* Evento fin */
           if (evt === 'end') return;
 
+          /* Texto incremental del asistente */
           assistantBuffer += data;
           setMessages((prev) => {
             const out = [...prev];
@@ -123,25 +119,11 @@ export default function ChatBody({ onChatEnded }) {
     }
   }
 
-  /* Cierra la sesión manualmente */
+  /* ───────────── Cerrar sesión manual ───────────── */
   async function endChatSession() {
     setEndError(null);
     try {
-      await fetch(
-        `${
-          import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
-        }/messages/end-session`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          /* El backend detecta la sesión activa automáticamente */
-          body: JSON.stringify({}),
-        },
-      );
-
+      await api.post('/messages/end-session');
       setMessages((prev) => [
         ...prev,
         {
@@ -153,12 +135,11 @@ export default function ChatBody({ onChatEnded }) {
       setChatEnded(true);
       if (onChatEnded) onChatEnded();
     } catch (err) {
-      console.error(err);
       setEndError('⚠️ Could not end session. Please try again.');
     }
   }
 
-  /* ─────────────── Markup ─────────────── */
+  /* ───────────── Render ───────────── */
   return (
     <div className="flex flex-col h-[500px] w-full max-w-2xl bg-white rounded-2xl shadow-xl border border-gray-300">
       <div ref={chatRef} className="flex-1 overflow-y-auto p-6 space-y-4">
@@ -183,7 +164,6 @@ export default function ChatBody({ onChatEnded }) {
         ))}
       </div>
 
-      {/* Input + botones */}
       {chatEnded ? (
         <div className="p-4 text-center text-sm text-gray-500">
           👋 Chat ended. Your session is saved in your history.
