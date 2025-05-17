@@ -182,4 +182,22 @@ router.post('/end-session', authenticate, async (req, res) => {
 });
 
 /* ─── (resto de endpoints sin cambios) ── */
+router.get('/sessions', authenticate, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT session_id, MIN(created_at) as date
+         FROM messages
+        WHERE user_id = $1
+     GROUP BY session_id
+     ORDER BY date DESC
+        LIMIT 5`,
+      [req.user.id]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Failed to fetch sessions:', err);
+    res.status(500).send('Could not fetch sessions');
+  }
+});
+
 export default router;
