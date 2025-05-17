@@ -8,7 +8,7 @@ import { isNativeError } from 'util/types';
 
 const router = Router();
 
-/* ─────── Utilidades ─────── */
+/* ─────── Constantes ─────── */
 const mapES = {
   alegría: 'joy',
   tristeza: 'sadness',
@@ -28,7 +28,6 @@ Always keep your tone supportive and understanding.
 
 
 router.post('/stream', authenticate, async (req, res) => {
-  /* Cabeceras SSE */
   res.set({
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -37,8 +36,6 @@ router.post('/stream', authenticate, async (req, res) => {
   });
   res.flushHeaders();
   req.socket.setTimeout(0);
-
-  /* Heartbeat para que Render no cierre el socket */
   const ping = setInterval(() => res.write(':\n\n'), 30_000);
 
   try {
@@ -49,7 +46,7 @@ router.post('/stream', authenticate, async (req, res) => {
       return res.end();
     }
 
-    /* ────── Sesión ────── */
+    /* Sesión */
     const { rows: latest } = await pool.query(
       `SELECT session_id, created_at
          FROM messages
@@ -59,16 +56,14 @@ router.post('/stream', authenticate, async (req, res) => {
       [userId],
     );
 
-    const now = new Date();
-    const lastSession = latest[0];
-    const sameSession =
-      lastSession && now - new Date(lastSession.created_at) < 1_800_000;
-    const sessionId = sameSession ? lastSession.session_id : randomUUID();
+    const now        = new Date();
+    const last       = latest[0];
+    const same       = last && now - new Date(last.created_at) < 1_800_000;
+    const sessionId  = same ? last.session_id : randomUUID();
 
-    /* → enviamos el sessionId al frontend */
     res.write(`event: session\ndata: ${sessionId}\n\n`);
 
-    /* Guarda el mensaje del usuario */
+    /* Guarda mensaje de usuario */
     const {
       rows: [{ id: messageId }],
     } = await pool.query(
@@ -78,7 +73,7 @@ router.post('/stream', authenticate, async (req, res) => {
       [userId, content, sessionId],
     );
 
-    /* ────── Emoción ────── */
+    /* Emoción */
     let english = 'neutral';
     try {
       const emotion = await classifyEmotion(content);
@@ -93,7 +88,7 @@ router.post('/stream', authenticate, async (req, res) => {
     }
     res.write(`event: emotion\ndata: ${english}\n\n`);
 
-    /* ────── Contexto (últimas 3 sesiones) ────── */
+    /* Contexto */
     const { rows: recentSessions } = await pool.query(
       `SELECT session_id
          FROM messages
@@ -103,6 +98,7 @@ router.post('/stream', authenticate, async (req, res) => {
         LIMIT 3`,
       [userId],
     );
+
     const sessionIds = recentSessions.map((s) => s.session_id);
 
     const { rows: history } = await pool.query(
@@ -121,7 +117,7 @@ router.post('/stream', authenticate, async (req, res) => {
       { role: 'user', content },
     ];
 
-    /* ────── OpenAI stream ────── */
+    /* Streaming OpenAI */
     const stream = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: prompt,
@@ -138,7 +134,6 @@ router.post('/stream', authenticate, async (req, res) => {
       res.write(`data: ${delta}\n\n`);
     }
 
-    /* Fin de stream */
     res.write('event: end\ndata: [DONE]\n\n');
 
     await pool.query(
@@ -195,7 +190,6 @@ router.get('/sessions', authenticate, async (req, res) => {
          session_id,
          MIN(created_at)               AS started_at,
          MAX(created_at)               AS ended_at,
-         DATE(MIN(created_at))         AS date,
          COUNT(*) FILTER (WHERE role='assistant') AS answers,
          LEFT(
               COALESCE(
@@ -212,10 +206,13 @@ router.get('/sessions', authenticate, async (req, res) => {
     [req.user.id],
   );
 
+  /* Epoch ms → el front los interpreta en su huso horario */
   rows.forEach((r) => {
-    r.started_at = new Date(r.started_at).toISOString();
-    r.ended_at   = new Date(r.ended_at).toISOString();
-    r.date       = new Date(r.date).toISOString();
+    const startMs = r.started_at.getTime();
+    const endMs   = r.ended_at.getTime();
+    r.started_at  = startMs;
+    r.ended_at    = endMs;
+    r.date        = startMs;
   });
 
   res.json(rows);
@@ -224,7 +221,7 @@ router.get('/sessions', authenticate, async (req, res) => {
 
 router.get('/session/:id/messages', authenticate, async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT role, content, created_at
+    `SELECT role, content, EXTRACT(EPOCH FROM created_at)*1000 AS ts
        FROM messages
       WHERE user_id   = $1
         AND session_id = $2
@@ -233,7 +230,6 @@ router.get('/session/:id/messages', authenticate, async (req, res) => {
   );
   res.json(rows);
 });
-
 
 router.get('/session/:id/summary', authenticate, async (req, res) => {
   const { rows } = await pool.query(
@@ -262,6 +258,42 @@ router.get('/session/:id/summary', authenticate, async (req, res) => {
   });
 
   res.json({ summary: completion.choices[0].message.content.trim() });
+});
+
+
+router.get('/summary/by-day/:date', authenticate, async (req, res) => {
+  const day = req.params.date; // '2025-05-17'
+  try {
+    const { rows } = await pool.query(
+      `SELECT role, content
+         FROM messages
+        WHERE user_id = $1
+          AND DATE(created_at AT TIME ZONE 'Asia/Jerusalem') = $2::date
+     ORDER BY id`,
+      [req.user.id, day],
+    );
+
+    if (!rows.length) return res.status(404).send('No messages that day');
+
+    const plain = rows.map((m) => `${m.role}: ${m.content}`).join('\n');
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Give an empathetic two-sentence summary of the user’s mood and progress for that day.',
+        },
+        { role: 'user', content: plain },
+      ],
+    });
+
+    res.json({ summary: completion.choices[0].message.content.trim() });
+  } catch (err) {
+    console.error('Daily summary error:', err);
+    res.status(500).send('Could not generate summary');
+  }
 });
 
 export default router;
