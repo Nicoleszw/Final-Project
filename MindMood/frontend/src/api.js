@@ -1,7 +1,9 @@
 import axios from 'axios';
 
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'https://mindmood-backend.onrender.com',
+  baseURL:
+    import.meta.env.VITE_API_URL || 'https://mindmood-backend.onrender.com',
+  withCredentials: true,
 });
 
 api.interceptors.request.use((config) => {
