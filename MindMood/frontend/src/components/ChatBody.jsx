@@ -1,3 +1,4 @@
+// ChatBody.jsx
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../hooks/useAuth';
@@ -34,6 +35,8 @@ export default function ChatBody({ onChatEnded }) {
     }
   };
 
+  useEffect(scrollChatToBottom, [messages]);
+
   async function sendMessage(e) {
     e.preventDefault();
     if (chatEnded || loading || !input.trim()) return;
@@ -50,14 +53,18 @@ export default function ChatBody({ onChatEnded }) {
     ]);
 
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/messages/stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ content }),
-      });
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/messages/stream`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'text/event-stream',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ content }),
+        }
+      );
 
       if (res.status === 401) throw new Error('unauthorized');
 
@@ -69,7 +76,7 @@ export default function ChatBody({ onChatEnded }) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
+        const chunk = decoder.decode(value, { stream: true });
         chunk.split('\n\n').forEach((raw) => {
           if (!raw.trim()) return;
 
@@ -93,7 +100,6 @@ export default function ChatBody({ onChatEnded }) {
               updated[userIdx + 1].content = assistantBuffer;
               return updated;
             });
-            scrollChatToBottom(); // 🔄 Only scroll the chat container
           }
         });
       }
@@ -119,7 +125,8 @@ export default function ChatBody({ onChatEnded }) {
         ...prev,
         {
           role: 'assistant',
-          content: '👋 Thank you for sharing. Your session has ended and is saved in your history.',
+          content:
+            '👋 Thank you for sharing. Your session has ended and is saved in your history.',
         },
       ]);
       setChatEnded(true);
@@ -179,7 +186,11 @@ export default function ChatBody({ onChatEnded }) {
           </form>
 
           <EndChatButton onConfirm={endChatSession} />
-          {endError && <div className="text-sm text-red-500 text-center py-2">{endError}</div>}
+          {endError && (
+            <div className="text-sm text-red-500 text-center py-2">
+              {endError}
+            </div>
+          )}
         </>
       )}
     </div>
