@@ -14,8 +14,6 @@ const badgeColor = {
 
 export default function ChatBody({ onChatEnded }) {
   const { token } = useAuth();
-
-  /* ✅ guardamos el sessionId que llega del backend */
   const [sessionId, setSessionId] = useState(null);
 
   const [messages, setMessages] = useState([
@@ -31,12 +29,10 @@ export default function ChatBody({ onChatEnded }) {
 
   const chatRef = useRef(null);
 
-  /* auto-scroll */
   useEffect(() => {
     chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight });
   }, [messages]);
 
-  /* ─────── send message ─────── */
   async function sendMessage(e) {
     e.preventDefault();
     if (chatEnded || loading || !input.trim()) return;
@@ -84,13 +80,11 @@ export default function ChatBody({ onChatEnded }) {
           const evt = head.replace('event: ', '').trim();
           const data = dataRaw;
 
-          /* ◾ sesión */
           if (evt === 'session') {
             setSessionId(data.trim());
             return;
           }
 
-          /* ◾ emoción */
           if (evt === 'emotion') {
             setMessages((prev) => {
               const out = [...prev];
@@ -100,10 +94,8 @@ export default function ChatBody({ onChatEnded }) {
             return;
           }
 
-          /* ◾ fin */
           if (evt === 'end') return;
 
-          /* ◾ texto delta */
           assistantBuffer += data;
           setMessages((prev) => {
             const out = [...prev];
@@ -126,7 +118,6 @@ export default function ChatBody({ onChatEnded }) {
     }
   }
 
-  /* ─────── end chat ─────── */
   async function endChatSession() {
     setEndError(null);
     try {
@@ -146,7 +137,6 @@ export default function ChatBody({ onChatEnded }) {
     }
   }
 
-  /* ─────── UI ─────── */
   return (
     <div className="flex flex-col h-[500px] w-full max-w-2xl bg-white rounded-2xl shadow-xl border border-gray-300">
       <div ref={chatRef} className="flex-1 overflow-y-auto p-6 space-y-4">
