@@ -8,7 +8,6 @@ import { isNativeError } from 'util/types';
 
 const router = Router();
 
-/* Mapeo etiquetas ES ➜ EN para el badge */
 const mapES = {
   alegría: 'joy',
   tristeza: 'sadness',
@@ -18,7 +17,6 @@ const mapES = {
   neutral: 'neutral',
 };
 
-/* Mensaje de sistema (prompt) para el psicólogo */
 const systemPrompt = `
 You are an empathetic psychologist. When a user starts a conversation, begin with a brief, caring follow-up question to explore their feelings.
 If they express distress or mental-health concerns, encourage them gently to seek professional help.
@@ -26,11 +24,8 @@ Once you understand the situation better, offer practical emotional support and 
 Always keep your tone supportive and understanding.
 `;
 
-/* ────────────────────────────────────────────────
-   STREAMING ENDPOINT (SSE) — POST /messages/stream
-   ──────────────────────────────────────────────── */
+/* ───────────────── STREAMING ───────────────── */
 router.post('/stream', authenticate, async (req, res) => {
-  /* Cabeceras SSE */
   res.set({
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -39,8 +34,6 @@ router.post('/stream', authenticate, async (req, res) => {
   });
   res.flushHeaders();
   req.socket.setTimeout(0);
-
-  /* Heartbeat cada 30 s */
   const ping = setInterval(() => res.write(':\n\n'), 30_000);
 
   try {
@@ -51,7 +44,7 @@ router.post('/stream', authenticate, async (req, res) => {
       return res.end();
     }
 
-    /* ─────────────────── Sesión ─────────────────── */
+    /* Sesión */
     const { rows: latest } = await pool.query(
       `SELECT session_id, created_at
          FROM messages
@@ -64,10 +57,10 @@ router.post('/stream', authenticate, async (req, res) => {
     const now = new Date();
     const lastSession = latest[0];
     const sameSession =
-      lastSession && now - new Date(lastSession.created_at) < 1_800_000; // 30 min
+      lastSession && now - new Date(lastSession.created_at) < 1_800_000;
     const sessionId = sameSession ? lastSession.session_id : randomUUID();
 
-    /* Guardamos mensaje del usuario */
+    /* Guarda mensaje de usuario */
     const userMsg = await pool.query(
       `INSERT INTO messages (user_id, role, content, session_id)
             VALUES ($1,'user',$2,$3)
@@ -75,7 +68,7 @@ router.post('/stream', authenticate, async (req, res) => {
       [userId, content, sessionId],
     );
 
-    /* ───────────── Clasificación emoción ─────────── */
+    /* Emoción */
     let english = 'neutral';
     try {
       const emotion = await classifyEmotion(content);
@@ -87,13 +80,10 @@ router.post('/stream', authenticate, async (req, res) => {
       );
     } catch (err) {
       console.warn('Emotion service failed:', err);
-      // seguimos: no cortamos el stream
     }
-
-    /* Enviamos emoción al cliente */
     res.write(`event: emotion\ndata: ${english}\n\n`);
 
-    /* ───────────── Contexto (últimas 3 sesiones) ─────────── */
+    /* Contexto reciente */
     const { rows: recentSessions } = await pool.query(
       `SELECT session_id
          FROM messages
@@ -120,7 +110,7 @@ router.post('/stream', authenticate, async (req, res) => {
       ...history.map((m) => ({ role: m.role, content: m.content })),
     ];
 
-    /* ───────────── OpenAI stream ─────────── */
+    /* Streaming OpenAI */
     const stream = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: prompt,
@@ -137,7 +127,6 @@ router.post('/stream', authenticate, async (req, res) => {
       res.write(`data: ${delta}\n\n`);
     }
 
-    /* Evento final + persistencia */
     res.write('event: end\ndata: [DONE]\n\n');
     await pool.query(
       `INSERT INTO messages (user_id, role, content, session_id)
@@ -156,24 +145,26 @@ router.post('/stream', authenticate, async (req, res) => {
   }
 });
 
-/* ────────────────────────────────────────────────
-   REST ENDPOINTS PARA HISTÓRICO Y RESÚMENES
-   ──────────────────────────────────────────────── */
-
-/* Lista de últimas 50 sesiones */
+/* ───────────── HISTÓRICO ───────────── */
 router.get('/sessions', authenticate, async (req, res) => {
   const { rows } = await pool.query(
     `SELECT session_id,
-            MIN(created_at) AS started_at,
-            MAX(created_at) AS ended_at,
+            MIN(created_at)  AS started_at,
+            MAX(created_at)  AS ended_at,
+            DATE(MIN(created_at)) AS date,
             COUNT(*) FILTER (WHERE role='assistant') AS answers
        FROM messages
       WHERE user_id = $1
    GROUP BY session_id
    ORDER BY ended_at DESC
-      LIMIT 50`,
+      LIMIT 5`,
     [req.user.id],
   );
+  rows.forEach((r) => {
+    r.started_at = new Date(r.started_at).toISOString();
+    r.ended_at   = new Date(r.ended_at).toISOString();
+    r.date       = new Date(r.date).toISOString();
+  });
   res.json(rows);
 });
 
@@ -190,7 +181,7 @@ router.get('/session/:id/messages', authenticate, async (req, res) => {
   res.json(rows);
 });
 
-/* Resumen de una sesión (2-3 frases) */
+/* Resumen */
 router.get('/session/:id/summary', authenticate, async (req, res) => {
   const { rows } = await pool.query(
     `SELECT role, content
@@ -200,7 +191,6 @@ router.get('/session/:id/summary', authenticate, async (req, res) => {
    ORDER BY id`,
     [req.user.id, req.params.id],
   );
-
   if (!rows.length) return res.status(404).send('Not found');
 
   const plain = rows.map((m) => `${m.role}: ${m.content}`).join('\n');
@@ -215,14 +205,12 @@ router.get('/session/:id/summary', authenticate, async (req, res) => {
       { role: 'user', content: plain },
     ],
   });
-
   res.json({ summary: completion.choices[0].message.content.trim() });
 });
 
-/* Cerrar sesión manualmente */
+/* Cerrar sesión */
 router.post('/end-session', authenticate, async (req, res) => {
   const { session_id } = req.body;
-  /* Si no se manda session_id, cerramos la más reciente */
   const {
     rows: [{ session_id: latest }],
   } = await pool.query(
